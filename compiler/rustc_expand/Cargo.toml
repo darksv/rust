@@ -29,4 +29,5 @@ smallvec = { version = "1.8.1", features = ["union", "may_dangle"] }
 termcolor = "1.2"
 thin-vec = "0.2.12"
 tracing = "0.1"
+clang = { version = "2.0.0", features = ["clang_3_8", "clang_5_0"] }
 # tidy-alphabetical-end

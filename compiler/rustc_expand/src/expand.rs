@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use crate::base::*;
 use crate::config::StripUnconfigured;
 use crate::errors::{
@@ -6,7 +7,7 @@ use crate::errors::{
 };
 use crate::hygiene::SyntaxContext;
 use crate::mbe::diagnostics::annotate_err_with_kind;
-use crate::module::{mod_dir_path, parse_external_mod, DirOwnership, ParsedExternalMod};
+use crate::module::{mod_dir_path, parse_external_mod, DirOwnership, ParsedExternalMod, ParsedExternalRustMod, ParsedExternalCMod};
 use crate::placeholders::{placeholder, PlaceholderExpander};
 
 use rustc_ast as ast;
@@ -1112,15 +1113,18 @@ impl InvocationCollectorNode for P<ast::Item> {
             ModKind::Unloaded => {
                 // We have an outline `mod foo;` so we need to parse the file.
                 let old_attrs_len = attrs.len();
-                let ParsedExternalMod { items, spans, file_path, dir_path, dir_ownership } =
-                    parse_external_mod(
-                        ecx.sess,
-                        ident,
-                        span,
-                        &ecx.current_expansion.module,
-                        ecx.current_expansion.dir_ownership,
-                        &mut attrs,
-                    );
+
+                let (items, spans, file_path, dir_path, dir_ownership) = match parse_external_mod(
+                    ecx.sess,
+                    ident,
+                    span,
+                    &ecx.current_expansion.module,
+                    ecx.current_expansion.dir_ownership,
+                    &mut attrs,
+                ) {
+                    ParsedExternalMod::Rust(ParsedExternalRustMod { items, spans, file_path, dir_path, dir_ownership }) => (items, spans, file_path, dir_path, dir_ownership),
+                    ParsedExternalMod::C(ParsedExternalCMod { items, spans, file_path, dir_path, dir_ownership }) => (items, spans, file_path, dir_path, dir_ownership),
+                };
 
                 if let Some(lint_store) = ecx.lint_store {
                     lint_store.pre_expansion_lint(

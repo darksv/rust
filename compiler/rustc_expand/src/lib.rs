@@ -23,6 +23,8 @@ extern crate tracing;
 
 extern crate proc_macro as pm;
 
+mod c_parse;
+
 mod placeholders;
 mod proc_macro_server;
 

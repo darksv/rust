@@ -162,7 +162,7 @@ fn try_file_to_source_file(
 
 /// Given a session and a path and an optional span (for error reporting),
 /// adds the path to the session's `source_map` and returns the new `source_file`.
-fn file_to_source_file(sess: &ParseSess, path: &Path, spanopt: Option<Span>) -> Lrc<SourceFile> {
+pub fn file_to_source_file(sess: &ParseSess, path: &Path, spanopt: Option<Span>) -> Lrc<SourceFile> {
     match try_file_to_source_file(sess, path, spanopt) {
         Ok(source_file) => source_file,
         Err(mut d) => {

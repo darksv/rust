@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use crate::base::ModuleData;
 use crate::errors::{
     ModuleCircular, ModuleFileNotFound, ModuleInBlock, ModuleInBlockName, ModuleMultipleCandidates,
@@ -14,6 +16,7 @@ use rustc_span::Span;
 use std::iter::once;
 use std::path::{self, Path, PathBuf};
 use thin_vec::ThinVec;
+use crate::c_parse;
 
 #[derive(Copy, Clone)]
 pub enum DirOwnership {
@@ -30,12 +33,25 @@ pub struct ModulePathSuccess {
     pub dir_ownership: DirOwnership,
 }
 
-pub(crate) struct ParsedExternalMod {
+pub(crate) struct ParsedExternalRustMod {
     pub items: ThinVec<P<Item>>,
     pub spans: ModSpans,
     pub file_path: PathBuf,
     pub dir_path: PathBuf,
     pub dir_ownership: DirOwnership,
+}
+
+pub(crate) struct ParsedExternalCMod {
+    pub items: ThinVec<P<Item>>,
+    pub spans: ModSpans,
+    pub file_path: PathBuf,
+    pub dir_path: PathBuf,
+    pub dir_ownership: DirOwnership,
+}
+
+pub(crate) enum ParsedExternalMod {
+    Rust(ParsedExternalRustMod),
+    C(ParsedExternalCMod),
 }
 
 pub enum ModError<'a> {
@@ -51,9 +67,23 @@ pub(crate) fn parse_external_mod(
     ident: Ident,
     span: Span, // The span to blame on errors.
     module: &ModuleData,
-    mut dir_ownership: DirOwnership,
+    dir_ownership: DirOwnership,
     attrs: &mut AttrVec,
 ) -> ParsedExternalMod {
+    match mod_lang_from_attr(sess, attrs, &module.dir_path) {
+        Language::Rust => ParsedExternalMod::Rust(parse_external_rust_mod(sess, ident, span, module, dir_ownership, attrs)),
+        Language::C => ParsedExternalMod::C(parse_external_c_mod(sess, ident, span, module, dir_ownership, attrs))
+    }
+}
+
+fn parse_external_rust_mod(
+    sess: &Session,
+    ident: Ident,
+    span: Span, // The span to blame on errors.
+    module: &ModuleData,
+    mut dir_ownership: DirOwnership,
+    attrs: &mut AttrVec,
+) -> ParsedExternalRustMod {
     // We bail on the first error, but that error does not cause a fatal error... (1)
     let result: Result<_, ModError<'_>> = try {
         // Extract the file path and the new ownership.
@@ -79,7 +109,39 @@ pub(crate) fn parse_external_mod(
     // Extract the directory path for submodules of the module.
     let dir_path = file_path.parent().unwrap_or(&file_path).to_owned();
 
-    ParsedExternalMod { items, spans, file_path, dir_path, dir_ownership }
+    ParsedExternalRustMod { items, spans, file_path, dir_path, dir_ownership }
+}
+
+fn parse_external_c_mod(
+    sess: &Session,
+    ident: Ident,
+    span: Span, // The span to blame on errors.
+    module: &ModuleData,
+    mut dir_ownership: DirOwnership,
+    attrs: &mut AttrVec,
+) -> ParsedExternalCMod {
+    // We bail on the first error, but that error does not cause a fatal error... (1)
+    let result: Result<_, ModError<'_>> = try {
+        // Extract the file path and the new ownership.
+        let mp = mod_file_path(sess, ident, &attrs, &module.dir_path, dir_ownership)?;
+        dir_ownership = mp.dir_ownership;
+
+        // Ensure file paths are acyclic.
+        if let Some(pos) = module.file_path_stack.iter().position(|p| p == &mp.file_path) {
+            Err(ModError::CircularInclusion(module.file_path_stack[pos..].to_vec()))?;
+        }
+
+        let source_file = rustc_parse::file_to_source_file(&sess.parse_sess, &mp.file_path, None);
+        (c_parse::parse(&mp.file_path, &source_file, sess), ModSpans::default(), mp.file_path)
+    };
+    // (1) ...instead, we return a dummy module.
+    let (items, spans, file_path) =
+        result.map_err(|err| err.report(sess, span)).unwrap_or_default();
+
+    // Extract the directory path for submodules of the module.
+    let dir_path = file_path.parent().unwrap_or(&file_path).to_owned();
+
+    ParsedExternalCMod { items, spans, file_path, dir_path, dir_ownership }
 }
 
 pub(crate) fn mod_dir_path(
@@ -164,6 +226,51 @@ fn mod_file_path<'a>(
             Ok(_) | Err(ModError::MultipleCandidates(..)) => Some(ident),
             _ => None,
         })),
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Language {
+    Rust,
+    C,
+}
+
+// TODO: xxx
+/// Derive a submodule path from the first found `#[path = "path_string"]`.
+/// The provided `dir_path` is joined with the `path_string`.
+fn mod_lang_from_attr(
+    sess: &Session,
+    attrs: &[Attribute],
+    dir_path: &Path,
+) -> Language {
+    // Extract path string from first `#[path = "path_string"]` attribute.
+    let Some(first_path) = attrs.iter().find(|at| at.has_name(sym::path)) else {
+        return Language::Rust;
+    };
+
+    let Some(path_sym) = first_path.value_str() else {
+        return Language::Rust;
+    };
+
+    let path_str = path_sym.as_str();
+
+    // On windows, the base path might have the form
+    // `\\?\foo\bar` in which case it does not tolerate
+    // mixed `/` and `\` separators, so canonicalize
+    // `/` to `\`.
+    #[cfg(windows)]
+        let path_str = path_str.replace("/", "\\");
+
+    let file_name = Path::new(&path_str);
+
+    match file_name.extension().and_then(|it| it.to_str()) {
+        Some("rs") => Language::Rust,
+        Some("h") => Language::C,
+        _ => validate_attr::emit_fatal_malformed_builtin_attribute(
+            &sess.parse_sess,
+            first_path,
+            sym::path,
+        )
     }
 }
 
