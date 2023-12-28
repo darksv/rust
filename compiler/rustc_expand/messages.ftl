@@ -143,3 +143,6 @@ expand_var_still_repeating =
 
 expand_wrong_fragment_kind =
     non-{$kind} macro in {$kind} position: {$name}
+
+expand_clang_error =
+    {$text}

@@ -410,3 +410,11 @@ pub struct DuplicateMatcherBinding {
     #[label(expand_label2)]
     pub prev: Span,
 }
+
+#[derive(Diagnostic)]
+#[diag(expand_clang_error)]
+pub struct ClangError<'a> {
+    #[primary_span]
+    pub span: Span,
+    pub text: &'a str,
+}

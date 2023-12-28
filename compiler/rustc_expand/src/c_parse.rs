@@ -10,10 +10,12 @@ use rustc_ast::{ast, Defaultness, DUMMY_NODE_ID, Extern, FnDecl, FnHeader,
 use rustc_ast::attr;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{LitKind};
+use rustc_lint_defs::BuiltinLintDiagnostics;
 
 use rustc_session::Session;
 use rustc_span::{DUMMY_SP, SourceFile, Span, Symbol};
 use rustc_span::symbol::Ident;
+use crate::errors;
 
 fn clang_to_rustc(source_file: &SourceFile, range: clang::source::SourceRange) -> Span {
     let file_pos = source_file.start_pos;
@@ -61,8 +63,21 @@ fn make_ty(source_file: &SourceFile, field: &clang::Entity) -> Ty {
 pub(crate) fn parse(path: &Path, source_file: &SourceFile, sess: &Session) -> ThinVec<P<Item>> {
     let mut items = ThinVec::new();
     let clang = clang::Clang::new().unwrap();
-    let index = clang::Index::new(&clang, false, true);
+    let index = clang::Index::new(&clang, false, false);
     let tu = index.parser(&path).parse().unwrap();
+
+    for diag in tu.get_diagnostics() {
+        let file_pos = source_file.start_pos;
+        // if let Some(range) = diag.get_ranges().get(0) {
+            sess.emit_err(errors::ClangError {
+                span: Span::with_root_ctxt(
+                    file_pos + rustc_span::BytePos(diag.get_location().get_file_location().offset),
+                    file_pos + rustc_span::BytePos(diag.get_location().get_file_location().offset) + rustc_span::BytePos(1),
+                ),
+                text: &diag.get_text(),
+            });
+        // }
+    }
 
     for entity in tu.get_entity().get_children() {
         match entity.get_kind() {
